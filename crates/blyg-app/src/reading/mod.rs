@@ -90,6 +90,8 @@ pub(crate) mod vm;
 #[cfg(test)]
 mod compose_tests; // --- reading compose ---
 #[cfg(test)]
+mod mentions_read_tests;
+#[cfg(test)]
 mod own_tests; // --- own posts ---
 #[cfg(test)]
 mod perf_tests; // the reading screens at scale
