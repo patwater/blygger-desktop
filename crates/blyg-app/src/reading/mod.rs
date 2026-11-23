@@ -371,6 +371,9 @@ pub struct State {
     pub show_hidden: bool,
     /// Responses' row cursor: the selected mention's id (j/k).
     pub mention_sel: Option<String>,
+    /// --- read responses --- the response read in the pane beside the
+    /// Responses list (its post is `opened`); `None`: the list alone.
+    pub mention_reading: Option<String>,
     pub own: Option<OwnVersions>,
     pub sheet: Option<RSheet>,
     pub sheet_gen: usize,
@@ -484,6 +487,7 @@ impl State {
             mentions_seen: HashSet::new(),
             show_hidden: false,
             mention_sel: None,
+            mention_reading: None,
             own: None,
             sheet: None,
             sheet_gen: 0,
@@ -805,6 +809,7 @@ impl MainView {
         };
         let was = self.reading.view;
         if was == View::Mentions && v != View::Mentions {
+            self.reading.mention_reading = None; // --- read responses ---
             // Leaving Mentions: what was on screen is no longer new.
             if let Some(ms) = self.reading.mentions.ready() {
                 let ids: Vec<String> = ms.iter().map(|m| m.id.clone()).collect();
@@ -961,7 +966,7 @@ impl MainView {
         let inner = match self.reading.view {
             View::Posts => return None,
             View::Reading => self.render_reading_screen(body_font, cx),
-            View::Mentions => self.render_mentions_screen(cx),
+            View::Mentions => self.render_mentions_screen(body_font, cx),
             View::Subscriptions => self.render_subscriptions_screen(cx),
         };
         Some(

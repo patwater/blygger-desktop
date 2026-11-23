@@ -824,6 +824,43 @@ impl FakeBackend {
         self.lock().reading_sends.clone()
     }
 
+    /// --- read responses --- Tests: a post `origin` serves at `id` (its
+    /// public item document), with `text` as its only version.
+    #[cfg(test)]
+    pub fn add_public_post(&self, origin: &str, id: &str, text: &str) {
+        let mut st = self.lock();
+        let Some(mut p) = st.rd.public.first().cloned() else {
+            return;
+        };
+        p.item.origin = origin.into();
+        p.item.remote_id = id.into();
+        p.item.content_md = text.into();
+        p.item.content_html = blyg_render::render_markdown(text);
+        p.item.page = Some(format!("t/{id}"));
+        p.item.version = 1;
+        p.versions = vec![RemoteVersion {
+            version: 1,
+            at: p.item.updated.clone().unwrap_or_default(),
+            note: None,
+            pinned: false,
+            current: true,
+            media: vec![],
+            lineage: Default::default(),
+        }];
+        st.rd.public.push(p);
+    }
+
+    /// --- read responses --- Tests: point the mention `id` at `source`,
+    /// with or without a blyg item id (a web page that replied has none).
+    #[cfg(test)]
+    pub fn set_mention_source(&self, id: &str, source: &str, source_id: Option<&str>) {
+        let mut st = self.lock();
+        if let Some(m) = st.rd.mentions.iter_mut().find(|m| m.id == id) {
+            m.source = source.into();
+            m.source_id = source_id.map(str::to_string);
+        }
+    }
+
     /// Tests: every public item document fetched, in order.
     #[cfg(test)]
     pub fn public_fetches(&self) -> Vec<String> {

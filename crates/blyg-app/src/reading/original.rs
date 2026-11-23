@@ -44,6 +44,20 @@ impl MainView {
         if self.reading.view != View::Reading {
             self.show_view(View::Reading, window, cx);
         }
+        self.open_original_here(origin, id, version, window, cx);
+    }
+
+    /// [`Self::open_original`] on the screen that's showing: the reading
+    /// pane beside the Responses list reads a response's post this way
+    /// (`mentions.rs`).
+    pub(crate) fn open_original_here(
+        &mut self,
+        origin: String,
+        id: String,
+        version: Option<u32>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let same_id = |r: &&blyg_core::ReadingItem| r.remote_id.eq_ignore_ascii_case(&id);
         let held = self
             .reading

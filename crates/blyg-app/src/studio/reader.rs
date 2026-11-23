@@ -533,7 +533,9 @@ impl MainView {
     /// What the reader body should show now, if anything.
     pub(crate) fn reader_doc(&self) -> Option<Doc> {
         match self.reading.view {
-            View::Reading => {
+            // --- read responses --- the pane beside the Responses list.
+            View::Mentions if self.reading.mention_reading.is_none() => None,
+            View::Reading | View::Mentions => {
                 // --- reader view --- the author's own page instead.
                 if self.site_view_shown() {
                     return None;

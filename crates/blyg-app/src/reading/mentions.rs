@@ -1,8 +1,18 @@
 //! Mentions & responses (⇧⌘M): a list, never a count. Who, origin,
 //! relation, when; a dot for new; hide a mention; and per post, whether its
 //! responses show on the public page. Keys: j/k (↓/↑) move a row cursor
-//! over every row (link notices too), h hides or unhides, r replies, o or ⏎
-//! opens the response (↗).
+//! over every row (link notices too), ⏎ (or a click on the row) reads the
+//! response in the reading pane beside the list, h hides or unhides, r
+//! replies, o opens it in the browser (↗).
+//!
+//! --- read responses --- The pane is the Reader's own (`render_reading_detail`,
+//! the same web view and action row): a response's post opens there as it
+//! would from a quote (`open_original_here`: held here, or fetched from its
+//! blyg's public item document without a token), and the screen stays on
+//! Responses. While it's open, j/k carry it to the next response; esc
+//! closes it before esc leaves the screen. A response that isn't a blyg
+//! post (a web page that replied) has nothing to read here, so ⏎ opens it
+//! in the browser and says so.
 
 use blyg_core::ResponsesMode;
 use gpui_kit::prelude::FluentBuilder as _;
@@ -90,22 +100,23 @@ impl MainView {
         out
     }
 
-    fn mentions_hint(&self) -> String {
+    pub(super) fn mentions_hint(&self) -> String {
         format!("who responded to your posts · {MENTION_KEYS} · esc back")
     }
 
     /// The rows in the order they're drawn (each post's responses, then
     /// its link notices).
-    fn mention_order(&self) -> Vec<MentionRow> {
+    pub(super) fn mention_order(&self) -> Vec<MentionRow> {
         self.mention_groups()
             .into_iter()
             .flat_map(|g| g.3)
             .collect()
     }
 
-    /// Responses' keys (the Received side): j/k or ↓/↑ move the row cursor,
-    /// h hides or unhides, r replies, o or ⏎ opens the response (↗).
-    /// Returns whether the key was taken.
+    /// Responses' keys (the Received side): j/k or ↓/↑ move the row cursor
+    /// (and the reading pane, while it's open), ⏎ reads the response beside
+    /// the list, esc closes the pane, h hides or unhides, r replies, o opens
+    /// the response in the browser (↗). Returns whether the key was taken.
     pub(super) fn mentions_key(
         &mut self,
         key: &str,
@@ -114,6 +125,11 @@ impl MainView {
     ) -> bool {
         if self.contacts.sent.showing || self.reading.mentions.ready().is_none() {
             return false;
+        }
+        // --- read responses --- esc closes the pane before leaving.
+        if key == "escape" && self.reading.mention_reading.is_some() {
+            self.close_response(cx);
+            return true;
         }
         let rows = self.mention_order();
         if rows.is_empty() {
@@ -135,6 +151,12 @@ impl MainView {
             "j" | "down" | "k" | "up" => {
                 let i = step(if matches!(key, "j" | "down") { 1 } else { -1 });
                 self.reading.mention_sel = Some(rows[i].id.clone());
+                // --- read responses --- the open pane follows the cursor.
+                if self.reading.mention_reading.is_some()
+                    && self.reading.mention_reading.as_ref() != Some(&rows[i].id)
+                {
+                    self.read_response(rows[i].id.clone(), window, cx);
+                }
                 cx.notify();
                 true
             }
@@ -172,12 +194,55 @@ impl MainView {
                             ),
                         }
                     }
+                    "enter" => self.read_response(row.id.clone(), window, cx),
                     _ => cx.open_url(&row.source),
                 }
                 true
             }
             _ => false,
         }
+    }
+
+    /// --- read responses --- Read the response `id` in the pane beside
+    /// the list: its blyg post, held here or fetched from its public item
+    /// document. One that isn't a blyg post opens in the browser.
+    pub(super) fn read_response(
+        &mut self,
+        id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(m) = self
+            .reading
+            .mentions
+            .ready()
+            .and_then(|ms| ms.iter().find(|m| m.id == id).cloned())
+        else {
+            return;
+        };
+        self.reading.mention_sel = Some(id.clone());
+        match (&m.source_origin, &m.source_id) {
+            (Some(origin), Some(sid)) if m.status != "gone" => {
+                self.reading.mention_reading = Some(id);
+                self.open_original_here(origin.clone(), sid.clone(), m.source_version, window, cx);
+            }
+            _ => {
+                self.reading.mention_reading = None;
+                cx.open_url(&m.source);
+                self.show_toast(
+                    "That response is a web page, not a blyg post: opened in your browser",
+                    None,
+                    cx,
+                );
+            }
+        }
+        cx.notify();
+    }
+
+    /// --- read responses --- Close the pane: the list takes the screen.
+    fn close_response(&mut self, cx: &mut Context<Self>) {
+        self.reading.mention_reading = None;
+        cx.notify();
     }
 
     fn hide_mention(&mut self, id: String, hidden: bool, cx: &mut Context<Self>) {
@@ -241,7 +306,11 @@ impl MainView {
         .detach();
     }
 
-    pub(super) fn render_mentions_screen(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn render_mentions_screen(
+        &self,
+        body_font: &SharedString,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let p = self.palette.on_page();
         let show_hidden = self.reading.show_hidden;
         let toggle_hidden = self
@@ -322,6 +391,39 @@ impl MainView {
                         .into_any_element()
                 }
             }
+        };
+        // --- read responses --- the list beside the reading pane.
+        let reading = available && !sent && self.reading.mention_reading.is_some();
+        let body = if reading {
+            div()
+                .flex_1()
+                .min_h_0()
+                .flex()
+                .child(
+                    div()
+                        .id("mentions-list-pane")
+                        .w(relative(0.42))
+                        .flex_none()
+                        .h_full()
+                        .flex()
+                        .flex_col()
+                        .rule_r(&p)
+                        .child(body),
+                )
+                .child(
+                    div()
+                        .id("mentions-reading-pane")
+                        .flex_1()
+                        .min_w_0()
+                        .h_full()
+                        .flex()
+                        .flex_col()
+                        .font_family(body_font.clone())
+                        .child(self.render_reading_detail(body_font, cx)),
+                )
+                .into_any_element()
+        } else {
+            body
         };
         div()
             .flex_1()
@@ -426,6 +528,7 @@ impl MainView {
         let (id, hidden, source) = (r.id.clone(), r.hidden, r.source.clone());
         let profile_of = r.source.clone(); // --- profiles ---
         let selected = self.reading.mention_sel.as_deref() == Some(r.id.as_str());
+        let read_id = r.id.clone(); // --- read responses ---
         div()
             .id(SharedString::from(format!("mention-{}", r.id)))
             .flex()
@@ -448,8 +551,21 @@ impl MainView {
                     .justify_center()
                     .when(r.new, |d| d.child(self.unread_marker(p.accent))),
             )
-            .child(div().font_weight(FontWeight::MEDIUM).child(r.who))
-            .child(div().text_color(p.muted).child(r.relation))
+            // --- read responses --- who and what: a click reads it beside
+            // the list (the origin, ↗ and the chips keep their own clicks).
+            .child(
+                div()
+                    .id(SharedString::from(format!("mention-read-{}", r.id)))
+                    .flex()
+                    .gap(px(8.))
+                    .cursor_pointer()
+                    .hover(|s| s.text_color(p.accent))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.read_response(read_id.clone(), window, cx)
+                    }))
+                    .child(div().font_weight(FontWeight::MEDIUM).child(r.who))
+                    .child(div().text_color(p.muted).child(r.relation)),
+            )
             // --- profiles --- the origin opens its profile; ↗ opens the source.
             .child(
                 div()
@@ -510,7 +626,7 @@ const NOTICES: &str = "only you see these";
 
 /// The row keys, as the header shows them (the reading list's letters:
 /// j/k move, as `⌥⌘R` replies and `⌘O` opens; h hides).
-const MENTION_KEYS: &str = "j/k move · h hide · r reply · o open ↗";
+const MENTION_KEYS: &str = "j/k move · ⏎ read · h hide · r reply · o open ↗";
 
 /// One post's responses control: what its page shows now, and the post's own
 /// choice (`None` on a server older than studio 0.8, which has no default).

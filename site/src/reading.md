@@ -674,8 +674,18 @@ Responses lists a post's notices after its responses, under **Linked from ·
 only you see these**: “Ada linked to this”, with ↗, Reply and Hide, as
 responses have.
 
+**Read a response in Burrow.** Press ⏎ on a response, or click who
+responded, and its post opens in a reading pane beside the list: the same
+pane, text and actions as the Reader's, so you can read it, quote it or
+reply without leaving Responses. A post your blyg doesn't hold is fetched
+from its author's blyg, as a quote's original is. While the pane is open,
+j/k move it to the next response, and esc closes it (esc again leaves the
+screen). A response from a web page that isn't a blyg has nothing to read
+here, so ⏎ opens it in your browser and says so.
+
 **Responses by keys:** j/k (or ↓/↑) move through the responses and notices,
-**h** hides or unhides one, **r** replies, and **o** or ⏎ opens it ↗.
+⏎ reads one beside the list, **h** hides or unhides one, **r** replies, and
+**o** opens it in your browser ↗.
 
 **Sent** beside **Received** lists the Webmentions your blyg sent for your
 posts: which version of which post, the page it pointed at, and where the
