@@ -160,6 +160,22 @@ fn the_tab_says_who_is_writing_and_how_one_gets_made() {
     assert!(!win.contains('⌘'), "{win}");
 }
 
+/// A studio older than 0.69 has no Agentic feed: the empty tab says so,
+/// and doesn't promise that the key or Settings will write an edition.
+#[test]
+fn the_tab_on_a_studio_without_editions_says_why_none_can_be_written() {
+    let note = super::agentic::unoffered_note("Daily digest");
+    assert!(note.starts_with("No edition yet."), "{note}");
+    assert!(note.contains("doesn't offer editions yet"), "{note}");
+    assert!(note.contains("studio 0.69"), "{note}");
+    assert!(!note.contains("writes one now"), "no promise: {note}");
+    let win = spelled_as(Platform::Windows, || {
+        super::agentic::unoffered_note("Daily digest")
+    });
+    assert!(win.contains("Ctrl+Shift+J"), "{win}");
+    assert!(!win.contains('⌘'), "{win}");
+}
+
 /// The command is in the keymap (so in the menus and the palette), with
 /// its key.
 #[test]
@@ -325,6 +341,61 @@ mod app {
         view.read_with(cx, |v, _| {
             assert_eq!(v.reading.agentic_writer.state(), &WriterState::Idle)
         });
+    }
+
+    /// Shows the Agentic feed tab and waits for its read.
+    fn open_agentic_tab(cx: &mut VisualTestContext, view: &Entity<MainView>) {
+        view.update_in(cx, |v, window, cx| {
+            v.show_view(View::Reading, window, cx);
+            v.reading.mode = super::super::stream_vm::ReadMode::Reader;
+            v.select_source(Source::Smart(Smart::Agentic), cx);
+        });
+        cx.run_until_parked();
+    }
+
+    /// On a studio older than 0.69 the key still answers: the tab says the
+    /// studio has no editions, above the note, instead of doing nothing
+    /// (the writer's line used to be hidden there, failure and all).
+    #[gpui_kit::test]
+    fn the_key_on_a_studio_without_editions_says_why(cx: &mut TestAppContext) {
+        let (view, f, cx) = setup(cx, CONFIG, FakeProvider::replying(&[REPLY]));
+        f.set_agentic_offered(false);
+        open_agentic_tab(cx, &view);
+        view.read_with(cx, |v, _| assert!(v.reading.agentic.unoffered));
+        cx.simulate_keystrokes(&crate::keymap::keys("alt-cmd-e"));
+        wait(cx, &view, "the key's answer", |v| {
+            matches!(v.reading.agentic_writer.state(), WriterState::Failed(_))
+        });
+        view.read_with(cx, |v, _| {
+            let WriterState::Failed(why) = v.reading.agentic_writer.state() else {
+                unreachable!()
+            };
+            assert!(why.contains("studio 0.69"), "{why}");
+        });
+        assert_eq!(f.agentic_puts(), 0);
+        crate::test_wait::settle_drawn(cx);
+        assert!(
+            cx.debug_bounds("agentic-writer-line").is_some(),
+            "the answer is drawn"
+        );
+    }
+
+    /// The studio was updated since the tab last read it: the key writes
+    /// an edition, and the tab stops saying editions aren't offered.
+    #[gpui_kit::test]
+    fn the_key_after_a_studio_update_writes_and_the_tab_catches_up(cx: &mut TestAppContext) {
+        let (view, f, cx) = setup(cx, CONFIG, FakeProvider::replying(&[REPLY]));
+        f.set_agentic_offered(false);
+        open_agentic_tab(cx, &view);
+        view.read_with(cx, |v, _| assert!(v.reading.agentic.unoffered));
+        f.set_agentic_offered(true);
+        view.update(cx, |v, cx| v.agentic_write_now(cx));
+        wait(cx, &view, "the edition is written", |v| {
+            *v.reading.agentic_writer.state() == WriterState::Idle
+                && v.reading.agentic.edition().is_some()
+        });
+        assert_eq!(f.agentic_puts(), 1);
+        view.read_with(cx, |v, _| assert!(!v.reading.agentic.unoffered));
     }
 
     /// A failure is said calmly in the tab, with a way to try again.

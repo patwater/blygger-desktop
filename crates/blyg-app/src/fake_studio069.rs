@@ -133,6 +133,10 @@ pub struct AgenticState {
     pub cleared: bool,
     /// This sign-in may write one (`putAgentic`).
     pub writable: bool,
+    /// The studio offers editions at all (`false`: one older than 0.69,
+    /// whose capabilities list none of `getAgentic`, `listAgentic`,
+    /// `putAgentic`).
+    pub offered: bool,
     /// Editions written.
     pub puts: usize,
 }
@@ -143,6 +147,7 @@ impl Default for AgenticState {
             written: None,
             cleared: false,
             writable: true,
+            offered: true,
             puts: 0,
         }
     }

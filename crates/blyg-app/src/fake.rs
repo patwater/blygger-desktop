@@ -943,6 +943,13 @@ impl FakeBackend {
         self.lock().agentic.writable = on;
     }
 
+    /// A studio older than 0.69: no Agentic feed at all (no feeds, no
+    /// edition, nothing to write to).
+    #[cfg(test)]
+    pub fn set_agentic_offered(&self, on: bool) {
+        self.lock().agentic.offered = on;
+    }
+
     /// Editions written to the fake blyg.
     #[cfg(test)]
     pub fn agentic_puts(&self) -> usize {
@@ -3416,6 +3423,9 @@ impl Backend for FakeBackend {
     // --- studio 0.69 ---
     fn agentic_feeds(&self) -> Result<Option<Vec<blyg_core::agentic::Feed>>> {
         self.remote_guard()?;
+        if !self.lock().agentic.offered {
+            return Ok(None);
+        }
         let title = self.lock().access_ai.ai.agentic_title.clone();
         Ok(Some(vec![blyg_core::agentic::Feed {
             id: blyg_core::agentic::DEFAULT_FEED.into(),
@@ -3427,7 +3437,11 @@ impl Backend for FakeBackend {
 
     fn agentic_edition(&self, feed: &str) -> Result<Option<blyg_core::agentic::Edition>> {
         self.remote_guard()?;
-        if feed != blyg_core::agentic::DEFAULT_FEED || self.lock().no_edition {
+        let none = {
+            let st = self.lock();
+            st.no_edition || !st.agentic.offered
+        };
+        if feed != blyg_core::agentic::DEFAULT_FEED || none {
             return Ok(None);
         }
         let title = self.lock().access_ai.ai.agentic_title.clone();
@@ -3439,7 +3453,8 @@ impl Backend for FakeBackend {
     // --- agentic writer ---
     fn agentic_writable(&self) -> Result<bool> {
         self.remote_guard()?;
-        Ok(self.lock().agentic.writable)
+        let st = self.lock();
+        Ok(st.agentic.offered && st.agentic.writable)
     }
 
     fn put_agentic_edition(
