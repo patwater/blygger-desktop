@@ -303,6 +303,9 @@ impl MainView {
         self.reading.agentic_writer.state = match out {
             Outcome::Written(e) => {
                 let r = &mut self.reading;
+                // Written, so the studio offers editions now (it was
+                // updated since the tab last read it).
+                r.agentic.unoffered = false;
                 r.agentic.error = None;
                 r.agentic.set_edition(Some(e));
                 r.agentic.refresh_cards(&r.rows);
@@ -314,6 +317,11 @@ impl MainView {
             Outcome::Nothing => {
                 WriterState::Failed("nothing unread or new to write about; nothing was sent".into())
             }
+            Outcome::NotOffered if self.reading.agentic.unoffered => WriterState::Failed(
+                "your blyg's studio doesn't offer editions yet (they arrived in studio 0.69); \
+                 nothing was sent"
+                    .into(),
+            ),
             Outcome::NotOffered => {
                 WriterState::Failed("your blyg doesn't let this sign-in write editions".into())
             }
@@ -337,7 +345,10 @@ impl MainView {
     }
 
     fn render_agentic_writer_line(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if self.reading.agentic.unoffered {
+        // A studio without editions: the note below says why, so the line
+        // shows only to answer the key (else the key seems to do nothing).
+        if self.reading.agentic.unoffered && self.reading.agentic_writer.state == WriterState::Idle
+        {
             return None;
         }
         let p = self.palette.on_page();

@@ -45,6 +45,20 @@ pub fn empty_note(title: &str) -> String {
     ))
 }
 
+/// What the tab says with no edition on a studio that has no Agentic feed
+/// (older than 0.69): why neither the key nor Settings can write one yet.
+pub fn unoffered_note(title: &str) -> String {
+    crate::keymap::hint_owned(format!(
+        "No edition yet. {title} is a digest of your reading in sections, written by an \
+         assistant. {NOT_OFFERED_BY_STUDIO} Once the studio is updated, ⌥⌘E writes one here, \
+         and so does Settings › Agentic feed (⌘,) after each sync."
+    ))
+}
+
+/// Why no edition can be written on a studio without the Agentic feed.
+pub const NOT_OFFERED_BY_STUDIO: &str = "Your blyg's studio doesn't offer editions yet: they \
+     arrived in studio 0.69, so Burrow's AI has nowhere to send one.";
+
 /// The edition and the tab's name, as last read.
 #[derive(Debug, Default)]
 pub struct Agentic {
@@ -327,12 +341,13 @@ impl MainView {
         let p = self.palette.on_page();
         let a = &self.reading.agentic;
         let Some(ed) = a.edition() else {
-            let mut note = empty_note(&tab_label(a));
-            if let Some(e) = &a.error {
-                note = format!("Couldn't read the edition: {e}");
+            let note = if let Some(e) = &a.error {
+                format!("Couldn't read the edition: {e}")
             } else if a.unoffered {
-                note.push_str(" Your blyg's studio doesn't offer editions yet (studio 0.69).");
-            }
+                unoffered_note(&tab_label(a))
+            } else {
+                empty_note(&tab_label(a))
+            };
             return self.empty_note(note);
         };
         let Some(l) = ed.layout.as_ref() else {
