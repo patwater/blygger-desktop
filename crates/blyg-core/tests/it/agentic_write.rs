@@ -8,8 +8,8 @@
 
 use blyg_core::agentic::{Edition, Present, SectionKind, parse_edition};
 use blyg_core::agentic_write::{
-    AgentInput, CANDIDATES_MAX, Candidate, EditionInput, Put, ReplyError, Sent, candidates, due,
-    from_reply, has_new, put_body, send_with,
+    AgentInput, CANDIDATES_MAX, Candidate, EditionInput, Put, ReplyError, Sent, asked_candidates,
+    candidates, due, from_reply, has_new, named_sources, put_body, send_with,
 };
 use blyg_core::{CoreError, ReadingItem, RemoteId, SubId};
 use serde_json::{Value, json};
@@ -322,4 +322,91 @@ fn a_conflict_is_read_again_and_written_once_more() {
 /// input, tested above; this is the stored one).
 fn written(revision: u64) -> Edition {
     parse_edition(&json!({ "revision": revision, "layout": null })).unwrap()
+}
+
+// --- agentic ask --- An edition written to the reader's own request
+// ("the latest from Ada and Rue on tides and boats").
+
+fn sub(id: &str, title: &str, origin: &str) -> blyg_core::Subscription {
+    serde_json::from_value(json!({
+        "id": id, "kind": "blyg", "origin": origin, "feed_url": format!("{origin}feed.json"),
+        "title": title, "status": "active", "in_blogroll": false,
+    }))
+    .unwrap()
+}
+
+/// The blygs a request names: by the name the sidebar shows (whole words,
+/// any case), by a bracketed tag in that name, by the name without a
+/// trailing "blog" or "blyg", or by the blyg's host.
+#[test]
+fn a_request_names_blygs_as_the_sidebar_names_them() {
+    let subs = vec![
+        sub("s-ada", "Ada's Harbour", "https://ada.blyg.example.com/"),
+        sub("s-jd", "[jdbb] studio blyg", "https://jd.blyg.example.com/"),
+        sub("s-pi", "Protocol Notes Blog", "https://notes.example.com/"),
+        sub("s-rue", "Rue", "https://rue.example.org/"),
+        sub("s-x", "X", "https://x.example.net/"),
+    ];
+    let ids = |r: &str| -> Vec<String> {
+        named_sources(r, &subs)
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
+    };
+    assert_eq!(
+        ids("could you please summarize the latest from ada's harbour and RUE on tides"),
+        ["s-ada", "s-rue"]
+    );
+    assert_eq!(ids("what has jdbb said about boats"), ["s-jd"]);
+    assert_eq!(ids("the latest from Protocol Notes"), ["s-pi"]);
+    assert_eq!(ids("anything new on notes.example.com?"), ["s-pi"]);
+    assert!(ids("rueful tides, nothing named").is_empty(), "whole words");
+    assert!(
+        ids("x marks the spot").is_empty(),
+        "names under 3 letters never match"
+    );
+    assert!(ids("everything on boats").is_empty());
+}
+
+/// For a request, the writer is given the latest posts whether read or
+/// not: from the named blygs, taken in turn so a busy one can't crowd out
+/// a quiet one; from everyone when none is named. Never your own, a
+/// withdrawn one or a Background one.
+#[test]
+fn a_request_is_given_the_latest_posts_from_the_named_blygs() {
+    let mut withdrawn = row("sub-a", "gone", "2026-11-22T10:00:00Z", None);
+    withdrawn.state = "tombstone".into();
+    let mut rows: Vec<ReadingItem> = (0..CANDIDATES_MAX + 10)
+        .map(|i| {
+            row(
+                "sub-a",
+                &format!("a{i:03}"),
+                &format!("2026-11-22T{:02}:{:02}:00Z", 10 + i / 60, i % 60),
+                Some(2),
+            )
+        })
+        .collect();
+    rows.push(row("sub-b", "b-old", "2026-11-01T09:00:00Z", Some(2)));
+    rows.push(row("sub-c", "c-new", "2026-11-23T09:00:00Z", None));
+    rows.push(row("~own", "mine", "2026-11-23T10:00:00Z", None));
+    rows.push(withdrawn);
+
+    let named = [SubId::from("sub-a"), SubId::from("sub-b")];
+    let c = asked_candidates(&rows, &named);
+    assert_eq!(c.len(), CANDIDATES_MAX);
+    assert!(
+        c.iter().any(|c| c.remote_id.as_str() == "b-old"),
+        "the quiet blyg's old, read post is given"
+    );
+    assert!(
+        c.iter().all(|c| c.sub.as_str() != "sub-c"),
+        "only those named"
+    );
+    assert!(c.windows(2).all(|w| w[0].at >= w[1].at), "newest first");
+    assert_eq!(c[0].remote_id.as_str(), "a069", "sub-a's newest");
+
+    let all = asked_candidates(&rows, &[]);
+    assert_eq!(all[0].remote_id.as_str(), "c-new", "none named: everyone's");
+    assert!(all.iter().all(|c| c.remote_id.as_str() != "mine"));
+    assert!(all.iter().all(|c| c.remote_id.as_str() != "gone"));
 }

@@ -31,6 +31,7 @@ fn job(auto: bool) -> Job {
         gap_ms: 3 * HOUR,
         model: None,
         agent: agent_name(ProviderKind::LocalCodex),
+        asked: None,
     }
 }
 
@@ -123,6 +124,35 @@ fn after_a_sync_it_writes_only_when_due() {
     ));
 }
 
+/// --- agentic ask --- A request is written whatever the gap, from the
+/// named blygs' posts read or not, and the request reaches the provider.
+#[test]
+fn a_request_is_written_from_the_blygs_it_names() {
+    use super::agentic_writer::Asked;
+    let f = fake();
+    let p = FakeProvider::replying(&[REPLY]);
+    assert!(matches!(
+        run(f.as_ref(), &p, &job(true), &CancelFlag::new()),
+        Outcome::Written(_)
+    ));
+    let asked = Job {
+        asked: Some(Asked {
+            text: "the latest from Ada on tides".into(),
+            sources: vec![blyg_core::SubId::from("sub-ada")],
+        }),
+        ..job(false)
+    };
+    assert!(matches!(
+        run(f.as_ref(), &p, &asked, &CancelFlag::new()),
+        Outcome::Written(_)
+    ));
+    let seen = p.seen.lock().unwrap();
+    let user = &seen[1].1;
+    assert!(user.contains("the latest from Ada on tides"), "{user}");
+    assert!(user.contains("] Ada · "), "{user}");
+    assert!(!user.contains("] Rue · "), "{user}");
+}
+
 /// A blyg that doesn't let this sign-in write editions is never asked,
 /// and nor is the provider.
 #[test]
@@ -211,6 +241,19 @@ mod app {
         Arc<FakeBackend>,
         &'a mut VisualTestContext,
     ) {
+        setup_with(cx, config, Arc::new(provider))
+    }
+
+    /// `setup`, keeping a handle on the provider (what it was asked).
+    fn setup_with<'a>(
+        cx: &'a mut TestAppContext,
+        config: &str,
+        provider: Arc<FakeProvider>,
+    ) -> (
+        Entity<MainView>,
+        Arc<FakeBackend>,
+        &'a mut VisualTestContext,
+    ) {
         let config = config.to_string();
         let prefs = Prefs::from_config(ConfigStore::in_memory(&config).config());
         cx.update(|cx| {
@@ -223,7 +266,7 @@ mod app {
                 cx,
             );
             cx.set_global(AiGlobal {
-                test_provider: Some(Arc::new(provider) as Arc<dyn Provider>),
+                test_provider: Some(provider as Arc<dyn Provider>),
                 timeout: Some(Duration::from_secs(60)),
                 endpoints: None,
             });
@@ -327,6 +370,93 @@ mod app {
         });
     }
 
+    /// --- agentic ask --- The tab offers "Ask…" beside "Write an edition
+    /// now".
+    #[gpui_kit::test]
+    fn the_tab_offers_to_ask_for_an_edition(cx: &mut TestAppContext) {
+        let (view, _f, cx) = setup(cx, CONFIG, FakeProvider::replying(&[REPLY]));
+        view.update_in(cx, |v, window, cx| {
+            v.show_view(View::Reading, window, cx);
+            v.reading.mode = super::super::stream_vm::ReadMode::Reader;
+            v.select_source(Source::Smart(Smart::Agentic), cx);
+        });
+        crate::test_wait::settle_drawn(cx);
+        assert!(cx.debug_bounds("agentic-ask").is_some(), "Ask…");
+        assert!(cx.debug_bounds("agentic-writer-now").is_some());
+    }
+
+    /// --- agentic ask --- Ask…: the sheet shows which blygs the request
+    /// names as it's typed, and ⏎ writes an edition to the request from
+    /// their posts alone. Ask… again starts from the last request.
+    #[gpui_kit::test]
+    fn a_request_writes_an_edition_from_the_blygs_it_names(cx: &mut TestAppContext) {
+        let p = Arc::new(FakeProvider::replying(&[REPLY]));
+        let (view, f, cx) = setup_with(cx, CONFIG, p.clone());
+        view.update_in(cx, |v, window, cx| {
+            v.show_view(View::Reading, window, cx);
+            v.reading.mode = super::super::stream_vm::ReadMode::Reader;
+            v.select_source(Source::Smart(Smart::Agentic), cx);
+            v.open_agentic_ask_sheet(window, cx);
+        });
+        cx.run_until_parked();
+        let ask = "could you please summarize the latest from Ada and Rue on tides and boats";
+        cx.simulate_input(ask);
+        cx.run_until_parked();
+        view.read_with(cx, |v, _| {
+            let Some(crate::app::reading::RSheet::AgenticAsk(s)) = v.reading.sheet.as_ref() else {
+                panic!("the Ask sheet is open");
+            };
+            let mut named: Vec<&str> = s.sources.iter().map(|s| s.as_str()).collect();
+            named.sort_unstable();
+            assert_eq!(named, ["sub-ada", "sub-rue"]);
+        });
+        crate::test_wait::settle_drawn(cx);
+        assert!(cx.debug_bounds("agentic-ask-from").is_some(), "says whose");
+        cx.simulate_keystrokes("enter");
+        wait(cx, &view, "the edition is written", |v| {
+            *v.reading.agentic_writer.state() == WriterState::Idle
+                && v.reading.sheet.is_none()
+                && f.agentic_puts() == 1
+        });
+        let seen = p.seen.lock().unwrap().clone();
+        assert_eq!(seen.len(), 1);
+        let user = &seen[0].1;
+        assert!(user.contains(ask), "the request is given: {user}");
+        assert!(
+            user.contains("] Ada · ") && user.contains("] Rue · "),
+            "{user}"
+        );
+        assert!(!user.contains("] Lin · "), "only the blygs named: {user}");
+
+        view.update_in(cx, |v, window, cx| v.open_agentic_ask_sheet(window, cx));
+        view.read_with(cx, |v, cx| {
+            let Some(crate::app::reading::RSheet::AgenticAsk(s)) = v.reading.sheet.as_ref() else {
+                panic!("the Ask sheet is open");
+            };
+            assert_eq!(s.input.read(cx).value(), ask, "the last request");
+        });
+    }
+
+    /// --- agentic ask --- An empty request isn't sent.
+    #[gpui_kit::test]
+    fn an_empty_request_is_not_sent(cx: &mut TestAppContext) {
+        let p = Arc::new(FakeProvider::replying(&[REPLY]));
+        let (view, f, cx) = setup_with(cx, CONFIG, p.clone());
+        view.update_in(cx, |v, window, cx| {
+            v.open_agentic_ask_sheet(window, cx);
+            v.commit_agentic_ask_sheet(window, cx);
+        });
+        cx.run_until_parked();
+        view.read_with(cx, |v, _| {
+            let Some(crate::app::reading::RSheet::AgenticAsk(s)) = v.reading.sheet.as_ref() else {
+                panic!("still open");
+            };
+            assert!(s.error.is_some(), "says what to write");
+        });
+        assert!(p.seen.lock().unwrap().is_empty());
+        assert_eq!(f.agentic_puts(), 0);
+    }
+
     /// A failure is said calmly in the tab, with a way to try again.
     #[gpui_kit::test]
     fn a_failure_is_shown_with_a_retry(cx: &mut TestAppContext) {
@@ -353,4 +483,20 @@ fn the_fake_blyg_starts_with_an_empty_edition_on_request() {
     let e = f.agentic_edition(DEFAULT_FEED).unwrap().unwrap();
     assert!(e.is_empty());
     assert_eq!(e.revision, 0);
+}
+
+/// --- agentic ask --- The Ask sheet says whose posts will be read.
+#[test]
+fn the_ask_sheet_says_whose_posts_are_read() {
+    use super::agentic_ask::from_words;
+    let n = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    assert!(from_words(&[]).starts_with("No blyg named yet"));
+    assert_eq!(
+        from_words(&n(&["Ada"])),
+        "From Ada: its latest posts, read or not."
+    );
+    assert_eq!(
+        from_words(&n(&["Ada", "Rue", "Lin"])),
+        "From Ada, Rue and Lin: their latest posts, read or not."
+    );
 }
