@@ -17,6 +17,10 @@
 //!   written once more ([`send_with`] is that rule over two closures).
 //! - [`due`] / [`has_new`]: after a sync it writes only when the gap since
 //!   the last edition passed and posts arrived since.
+//! - --- agentic ask --- [`named_sources`] / [`asked_candidates`]: an
+//!   edition written to the reader's own request ("the latest from Ada and
+//!   Rue on tides"): the blygs it names, and their latest posts, read or
+//!   not.
 //!
 //! The prompt is blyg-ai's (`prompts::agentic_edition_prompt`); the app
 //! runs the model off the UI thread and calls these.
@@ -25,7 +29,7 @@ use serde_json::{Map, Value, json};
 
 use crate::agentic::{Edition, Present, SectionKind};
 use crate::backend::{Backend, Result};
-use crate::model::{ReadingItem, RemoteId, SubId};
+use crate::model::{ReadingItem, RemoteId, SubId, Subscription};
 
 /// The most posts the model is given.
 pub const CANDIDATES_MAX: usize = 60;
@@ -90,25 +94,136 @@ pub fn candidates(rows: &[ReadingItem], since: Option<&str>) -> Vec<Candidate> {
     picked
         .into_iter()
         .take(CANDIDATES_MAX)
-        .map(|r| {
-            let title = crate::model::plain_title(&r.content_md).filter(|t| !t.is_empty());
-            let all = crate::model::plain_text(&r.content_md);
-            let words = match &title {
-                Some(t) => all.strip_prefix(t.as_str()).unwrap_or(&all).trim(),
-                None => all.trim(),
-            };
-            Candidate {
-                sub: r.subscription_id.clone(),
-                remote_id: r.remote_id.clone(),
-                version: r.version,
-                source: r.subscription_title.clone(),
-                title,
-                excerpt: crate::text::clip(words, EXCERPT_MAX).into_owned(),
-                at: r.sort_at(),
-                observed_at: r.observed_at.clone(),
-            }
-        })
+        .map(candidate)
         .collect()
+}
+
+fn candidate(r: &ReadingItem) -> Candidate {
+    let title = crate::model::plain_title(&r.content_md).filter(|t| !t.is_empty());
+    let all = crate::model::plain_text(&r.content_md);
+    let words = match &title {
+        Some(t) => all.strip_prefix(t.as_str()).unwrap_or(&all).trim(),
+        None => all.trim(),
+    };
+    Candidate {
+        sub: r.subscription_id.clone(),
+        remote_id: r.remote_id.clone(),
+        version: r.version,
+        source: r.subscription_title.clone(),
+        title,
+        excerpt: crate::text::clip(words, EXCERPT_MAX).into_owned(),
+        at: r.sort_at(),
+        observed_at: r.observed_at.clone(),
+    }
+}
+
+// --- agentic ask --- An edition written to the reader's own request
+// ("could you summarize the latest from Ada and Rue on tides and boats").
+
+/// The longest request the model is given, in characters.
+pub const REQUEST_MAX: usize = 1_000;
+
+/// A name shorter than this never matches (a blyg called "X" would match
+/// half of every request).
+const NAME_MIN: usize = 3;
+
+/// Lowercase words, anything else a single space, padded with a space at
+/// each end so a phrase matches whole words only.
+fn words(s: &str) -> String {
+    let w: Vec<String> = s
+        .split(|c: char| !c.is_alphanumeric() && c != '\'')
+        .map(|w| w.trim_matches('\'').to_lowercase())
+        .filter(|w| !w.is_empty())
+        .collect();
+    format!(" {} ", w.join(" "))
+}
+
+/// The ways a request can name this blyg: its sidebar name, a bracketed
+/// tag in that name (`[jdbb] studio blyg` → `jdbb`), the name without a
+/// trailing "blog" or "blyg", and its host.
+fn names_of(s: &Subscription) -> Vec<String> {
+    let mut out = vec![words(&s.title)];
+    let mut rest = s.title.as_str();
+    while let Some(open) = rest.find('[') {
+        let Some(close) = rest[open..].find(']') else {
+            break;
+        };
+        out.push(words(&rest[open + 1..open + close]));
+        rest = &rest[open + close + 1..];
+    }
+    let name = words(&s.title);
+    for tail in [" blog ", " blyg "] {
+        if let Some(short) = name.strip_suffix(tail) {
+            out.push(format!("{short} "));
+        }
+    }
+    let host = s
+        .origin
+        .split("://")
+        .nth(1)
+        .unwrap_or(&s.origin)
+        .split('/')
+        .next()
+        .unwrap_or_default();
+    out.push(words(host.strip_prefix("www.").unwrap_or(host)));
+    out.retain(|n| n.trim().chars().count() >= NAME_MIN);
+    out
+}
+
+/// The blygs a request names, in the order of `subs` (see [`names_of`]).
+pub fn named_sources(request: &str, subs: &[Subscription]) -> Vec<SubId> {
+    let asked = words(request);
+    subs.iter()
+        .filter(|s| names_of(s).iter().any(|n| asked.contains(n.as_str())))
+        .map(|s| s.id.clone())
+        .collect()
+}
+
+/// What the model is given for a request: the latest posts, read or not,
+/// from the blygs it names (taken from each in turn, so a busy blyg can't
+/// crowd out a quiet one), or from everyone when it names none; newest
+/// first, at most [`CANDIDATES_MAX`]. Never your own, a withdrawn one or a
+/// Background one.
+pub fn asked_candidates(rows: &[ReadingItem], sources: &[SubId]) -> Vec<Candidate> {
+    let mut pool: Vec<&ReadingItem> = rows
+        .iter()
+        .filter(|r| !crate::own::is_own_row(r) && r.state != "tombstone" && !r.is_background())
+        .filter(|r| sources.is_empty() || sources.contains(&r.subscription_id))
+        .collect();
+    pool.sort_by_key(|r| std::cmp::Reverse(r.sort_at()));
+    let picked: Vec<&ReadingItem> = if sources.len() < 2 {
+        pool.into_iter().take(CANDIDATES_MAX).collect()
+    } else {
+        let mut each: Vec<std::vec::IntoIter<&ReadingItem>> = sources
+            .iter()
+            .map(|s| {
+                pool.iter()
+                    .copied()
+                    .filter(|r| &r.subscription_id == s)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+            })
+            .collect();
+        let mut out = Vec::new();
+        'turns: loop {
+            let mut any = false;
+            for it in &mut each {
+                if let Some(r) = it.next() {
+                    out.push(r);
+                    any = true;
+                    if out.len() == CANDIDATES_MAX {
+                        break 'turns;
+                    }
+                }
+            }
+            if !any {
+                break;
+            }
+        }
+        out.sort_by_key(|r| std::cmp::Reverse(r.sort_at()));
+        out
+    };
+    picked.into_iter().map(candidate).collect()
 }
 
 /// Whether any post arrived since the last edition (`None`: never one).

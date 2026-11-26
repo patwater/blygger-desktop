@@ -20,6 +20,7 @@
 
 // --- agentic feed --- studio 0.69's edition in the Agentic feed tab.
 pub(crate) mod agentic;
+pub(crate) mod agentic_ask; // --- agentic ask --- an edition to the reader's request
 #[cfg(test)]
 mod agentic_tests;
 pub(crate) mod agentic_writer; // --- agentic writer --- Burrow's AI writes the edition
@@ -378,6 +379,9 @@ pub enum RSheet {
     },
     /// --- mark all read --- "Mark 37 posts in Rue read?", asked first.
     MarkAll(Box<marks::MarkAll>),
+    /// --- agentic ask --- Ask… on the Agentic feed tab: a request for an
+    /// edition.
+    AgenticAsk(Box<agentic_ask::AskSheet>),
     /// --- OPML --- Import Subscriptions from OPML… (preview, run, summary).
     Opml(Box<opml::Sheet>),
     /// --- discover --- Discover Blygs… (blygger.com's directory).
@@ -1302,6 +1306,7 @@ impl MainView {
             RSheet::HopperName { .. } => (440., self.render_hopper_name_sheet(sheet, cx)),
             RSheet::HopperConfirm { .. } => (460., self.render_hopper_confirm(sheet, cx)),
             RSheet::MarkAll(m) => (440., self.render_mark_all(m, cx)), // --- mark all read ---
+            RSheet::AgenticAsk(s) => (520., self.render_agentic_ask_sheet(s, cx)), // --- agentic ask ---
         };
         Some(self.sheet_frame(width, content, cx))
     }

@@ -146,11 +146,13 @@ Burrow's own AI can write your blyg's Agentic feed edition (see
 [Reading](reading.md)). It runs when you press ⌥⌘E in the Agentic feed tab,
 and, with `agentic-writer = after-sync` (Settings › Agentic feed), after a
 sync that brings new posts, at most every `agentic-writer-gap` hours (3 by
-default). Off by default.
+default). Off by default. **Ask…** above the tab writes one to a request you
+type ("the latest from Ada and Rue on tides and boats").
 
 | What | Where it goes |
 | --- | --- |
 | The source name, title and opening words (about 280 characters) of up to 60 posts you hold that are unread or arrived since the last edition (never your own posts, never withdrawn or Background ones), and your blyg's Agentic feed prompt (Blyg › AI on Your Blyg…) | The provider in `agentic-writer-provider` (default: the one the writing helpers use), with `agentic-writer-model` |
+| With Ask…: your request, and the source name, title and opening words of up to 60 of the latest posts (read or not) from the blygs it names, or from every blyg you follow when it names none, with your blyg's Agentic feed prompt | The same provider |
 | The edition it writes: headlines, summaries and reasons, the posts by subscription and id, "Burrow · *provider*" and the model | Your blyg (`PUT /api/agentic/default`), only where your sign-in may write editions |
 
 The model names posts by number, never by id; Burrow drops any it wasn't

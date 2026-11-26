@@ -103,9 +103,16 @@ right.
   every 3 hours (`agentic-writer`, `agentic-writer-gap`). While it writes the
   tab says "Writing an edition with …"; if it can't, it says why, with Try
   again, and sends nothing. The masthead then says "by Burrow · *provider*".
-  It writes only where your sign-in may (studio's `putAgentic`). What it
-  sends where: [AI helpers](ai.md#agentic-feed-what-is-sent-where). Before
-  the first edition, the tab says "No edition yet." and how one gets made.
+  It writes only where your sign-in may (studio's `putAgentic`). **Ask…**
+  beside "Write an edition now" asks for an edition in your own words:
+  "could you summarize the latest from Ada and Rue on tides and boats". Name
+  blygs as the sidebar names them (or by a bracketed tag in the name, or
+  their address); the sheet says whose posts it will read as you type, and
+  ⏎ writes the edition from their latest posts, read or not, on the topics
+  you asked for. When it names none, it reads the latest from every blyg
+  you follow. Ask… again starts from your last request. What it sends
+  where: [AI helpers](ai.md#agentic-feed-what-is-sent-where). Before the
+  first edition, the tab says "No edition yet." and how one gets made.
 - **Raw** is what came in from the blygs you read, newest first, as it
   arrived: nothing moved to Background, nothing folded under a thread,
   withdrawn posts included. Your own posts aren't in it.

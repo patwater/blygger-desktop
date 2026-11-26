@@ -767,11 +767,40 @@ pub fn agentic_edition_prompt(
     brief: Option<&str>,
     posts: &[blyg_core::agentic_write::Candidate],
 ) -> Prompt {
+    edition_prompt(brief, None, posts)
+}
+
+/// --- agentic ask --- The prompt for an edition written to the reader's
+/// own request ("the latest from Ada and Rue on tides"): the brief, then
+/// the request, which wins where they differ. The request is cut to
+/// `REQUEST_MAX` characters.
+pub fn agentic_asked_prompt(
+    brief: Option<&str>,
+    posts: &[blyg_core::agentic_write::Candidate],
+    request: &str,
+) -> Prompt {
+    edition_prompt(brief, Some(request), posts)
+}
+
+fn edition_prompt(
+    brief: Option<&str>,
+    request: Option<&str>,
+    posts: &[blyg_core::agentic_write::Candidate],
+) -> Prompt {
     let brief = brief
         .map(str::trim)
         .filter(|b| !b.is_empty())
         .unwrap_or(AGENTIC_DEFAULT_BRIEF);
-    let mut user = format!("Brief: {brief}\n\nPosts, newest first:\n");
+    let mut user = format!("Brief: {brief}\n");
+    if let Some(r) = request.map(str::trim).filter(|r| !r.is_empty()) {
+        let r = blyg_core::text::clip(r, blyg_core::agentic_write::REQUEST_MAX);
+        user.push_str(&format!(
+            "\nThe reader's request for this edition: {r}\n\nWhere the request and the brief \
+             differ, follow the request: it may name blygs, topics or a shape for the edition. \
+             Leave out posts it doesn't ask for, and say so in the lede if few posts fit.\n"
+        ));
+    }
+    user.push_str("\nPosts, newest first:\n");
     for (i, p) in posts.iter().enumerate() {
         let title = p.title.as_deref().unwrap_or("untitled");
         user.push_str(&format!("\n[{}] {} · {}\n", i + 1, p.source, title));

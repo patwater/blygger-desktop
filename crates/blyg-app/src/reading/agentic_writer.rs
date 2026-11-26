@@ -17,9 +17,13 @@
 //!   edition with …" meanwhile, then shows the edition; a failure is said
 //!   calmly above the tab, with Try again.
 //!
+//! - --- agentic ask --- Ask… (on the line above the tab) writes one to
+//!   the reader's own request ("the latest from Ada and Rue on tides"):
+//!   `agentic_ask.rs` has the sheet; [`Asked`] is what it sends here.
+//!
 //! What's sent where: the titles and opening words of up to 60 posts, and
-//! the blyg's Agentic feed prompt, to the chosen provider; the edition to
-//! the blyg. Settings › Agentic feed and `site/src/ai.md` say so.
+//! the blyg's Agentic feed prompt (and a request typed in Ask…), to the
+//! chosen provider; the edition to the blyg. Settings › Agentic feed and `site/src/ai.md` say so.
 
 use std::time::{Duration, Instant};
 
@@ -73,6 +77,16 @@ pub struct Job {
     pub model: Option<String>,
     /// [`agent_name`].
     pub agent: String,
+    /// --- agentic ask --- Written to the reader's request (Ask…).
+    pub asked: Option<Asked>,
+}
+
+/// --- agentic ask --- A request typed in Ask…, and the blygs it names
+/// (`agentic_write::named_sources`; none: everyone's latest).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Asked {
+    pub text: String,
+    pub sources: Vec<blyg_core::SubId>,
 }
 
 /// What a run came to.
@@ -106,22 +120,36 @@ pub fn run(
         Ok(None) => return Outcome::NotOffered,
         Err(e) => return Outcome::Failed(e.to_string()),
     };
-    let since = agentic_write::last_written(&current);
-    if job.auto && !agentic_write::due(since.as_deref(), job.now_ms, job.gap_ms) {
-        return Outcome::Skipped;
-    }
-    let given = agentic_write::candidates(&backend.reading(), since.as_deref());
-    if job.auto && !agentic_write::has_new(&given, since.as_deref()) {
-        return Outcome::Skipped;
-    }
-    if given.is_empty() {
-        return Outcome::Nothing;
-    }
+    let given = if let Some(a) = &job.asked {
+        let given = agentic_write::asked_candidates(&backend.reading(), &a.sources);
+        if given.is_empty() {
+            return Outcome::Failed(
+                "there are no posts from those blygs on this computer yet; nothing was sent".into(),
+            );
+        }
+        given
+    } else {
+        let since = agentic_write::last_written(&current);
+        if job.auto && !agentic_write::due(since.as_deref(), job.now_ms, job.gap_ms) {
+            return Outcome::Skipped;
+        }
+        let given = agentic_write::candidates(&backend.reading(), since.as_deref());
+        if job.auto && !agentic_write::has_new(&given, since.as_deref()) {
+            return Outcome::Skipped;
+        }
+        if given.is_empty() {
+            return Outcome::Nothing;
+        }
+        given
+    };
     let brief = backend
         .server_ai_settings()
         .ok()
         .and_then(|s| s.feed_prompt);
-    let prompt = blyg_ai::prompts::agentic_edition_prompt(brief.as_deref(), &given);
+    let prompt = match &job.asked {
+        Some(a) => blyg_ai::prompts::agentic_asked_prompt(brief.as_deref(), &given, &a.text),
+        None => blyg_ai::prompts::agentic_edition_prompt(brief.as_deref(), &given),
+    };
     let req = blyg_ai::GenRequest {
         max_tokens: Some(MAX_TOKENS),
         ..prompt.request(cancel).with_model(job.model.clone())
@@ -179,6 +207,8 @@ pub struct Writer {
     task: Option<Task<()>>,
     /// When a reading change last looked whether one is due.
     looked: Option<Instant>,
+    /// --- agentic ask --- The last request (Ask… starts from it).
+    pub(crate) last_request: String,
 }
 
 impl Writer {
@@ -224,7 +254,13 @@ impl MainView {
 
     /// ⌥⌘E: write an edition now, whatever the gap.
     pub(crate) fn agentic_write_now(&mut self, cx: &mut Context<Self>) {
-        self.agentic_write(false, cx);
+        self.agentic_write(false, None, cx);
+    }
+
+    /// --- agentic ask --- Write an edition to the reader's request.
+    pub(crate) fn agentic_write_asked(&mut self, asked: Asked, cx: &mut Context<Self>) {
+        self.reading.agentic_writer.last_request = asked.text.clone();
+        self.agentic_write(false, Some(asked), cx);
     }
 
     /// Hook: a reading change (a sync). With `agentic-writer = after-sync`,
@@ -238,10 +274,10 @@ impl MainView {
             return;
         }
         self.reading.agentic_writer.looked = Some(Instant::now());
-        self.agentic_write(true, cx);
+        self.agentic_write(true, None, cx);
     }
 
-    fn agentic_write(&mut self, auto: bool, cx: &mut Context<Self>) {
+    fn agentic_write(&mut self, auto: bool, asked: Option<Asked>, cx: &mut Context<Self>) {
         if self.reading.agentic_writer.task.is_some() {
             return;
         }
@@ -262,6 +298,7 @@ impl MainView {
             gap_ms: (f64::from(config.agentic_writer_gap_hours()) * 3_600_000.0) as i64,
             model: config.agentic_writer_model().map(str::to_string),
             agent: agent_name(picked.kind),
+            asked,
         };
         if !auto {
             self.reading.agentic_writer.state = WriterState::Writing {
@@ -375,6 +412,33 @@ impl MainView {
                         .min_w_0()
                         .line_height(relative(1.4))
                         .child(words),
+                )
+                // --- agentic ask ---
+                .when(
+                    !matches!(
+                        self.reading.agentic_writer.state,
+                        WriterState::Writing { .. }
+                    ),
+                    |d| {
+                        d.child(
+                            div()
+                                .id("agentic-ask")
+                                .debug_selector(|| "agentic-ask".into())
+                                .flex_none()
+                                .px(px(8.))
+                                .py(px(2.))
+                                .rounded(px(4.))
+                                .border_1()
+                                .border_color(p.line)
+                                .text_color(p.accent_text())
+                                .cursor_pointer()
+                                .hover(|d| d.bg(p.sel))
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.open_agentic_ask_sheet(window, cx)
+                                }))
+                                .child("Ask…"),
+                        )
+                    },
                 )
                 .when_some(action, |d, label| {
                     d.child(
